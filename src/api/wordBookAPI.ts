@@ -31,6 +31,11 @@ const wordBookAPI = {
       headers: { 'Content-Type': 'multipart/form-data' },
     })
   },
+  textToVoice(params: { text: string }) {
+    return services.get(`${base.lkBaseURL}/wordBook/textToVoice`, {
+      params,
+    })
+  },
 }
 
 export default wordBookAPI

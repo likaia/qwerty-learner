@@ -1,73 +1,193 @@
+import base from '@/api/base'
+import wordBookAPI from '@/api/wordBookAPI'
 import { pronunciationConfigAtom } from '@/store'
 import type { PronunciationType } from '@/typings'
 import { addHowlListener } from '@/utils'
 import { romajiToHiragana } from '@/utils/kana'
-import noop from '@/utils/noop'
-import type { Howl } from 'howler'
+import { Howl } from 'howler'
 import { useAtomValue } from 'jotai'
-import { useEffect, useMemo, useState } from 'react'
-import useSound from 'use-sound'
-import type { HookOptions } from 'use-sound/dist/types'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
-const pronunciationApi = 'https://dict.youdao.com/dictvoice?audio='
-export function generateWordSoundSrc(word: string, pronunciation: Exclude<PronunciationType, false>): string {
+const VOICE_PREFIX = `${base.lkBaseURL}/uploads/`
+const FALLBACK_VOICE_API = 'https://dict.youdao.com/dictvoice?audio='
+const pronunciationCache = new Map<string, string>()
+const pendingPronunciationRequest = new Map<string, Promise<string>>()
+
+const getPronunciationKey = (text: string, pronunciation: Exclude<PronunciationType, false>) => `${pronunciation}:${text}`
+
+const transformTextByPronunciation = (word: string, pronunciation: Exclude<PronunciationType, false>) => {
+  if (pronunciation === 'romaji') {
+    return romajiToHiragana(word)
+  }
+  return word
+}
+
+const getFallbackPronunciationSrc = (word: string, pronunciation: Exclude<PronunciationType, false>) => {
+  if (!word) return ''
   switch (pronunciation) {
     case 'uk':
-      return `${pronunciationApi}${word}&type=1`
+      return `${FALLBACK_VOICE_API}${word}&type=1`
     case 'us':
-      return `${pronunciationApi}${word}&type=2`
+      return `${FALLBACK_VOICE_API}${word}&type=2`
     case 'romaji':
-      return `${pronunciationApi}${romajiToHiragana(word)}&le=jap`
+      return `${FALLBACK_VOICE_API}${romajiToHiragana(word)}&le=jap`
     case 'zh':
-      return `${pronunciationApi}${word}&le=zh`
+      return `${FALLBACK_VOICE_API}${word}&le=zh`
     case 'ja':
-      return `${pronunciationApi}${word}&le=jap`
+      return `${FALLBACK_VOICE_API}${word}&le=jap`
     case 'de':
-      return `${pronunciationApi}${word}&le=de`
+      return `${FALLBACK_VOICE_API}${word}&le=de`
     case 'hapin':
     case 'kk':
-      return `${pronunciationApi}${word}&le=ru` // 有道不支持哈萨克语, 暂时用俄语发音兜底
+      return `${FALLBACK_VOICE_API}${word}&le=ru`
     case 'id':
-      return `${pronunciationApi}${word}&le=id`
+      return `${FALLBACK_VOICE_API}${word}&le=id`
     default:
       return ''
   }
+}
+
+const fetchPronunciationAudio = async (word: string, pronunciation: Exclude<PronunciationType, false>) => {
+  const safeWord = word?.trim()
+  if (!safeWord) return ''
+  const text = transformTextByPronunciation(safeWord, pronunciation)
+  const cacheKey = getPronunciationKey(text, pronunciation)
+  if (pronunciationCache.has(cacheKey)) {
+    return pronunciationCache.get(cacheKey) as string
+  }
+  if (pendingPronunciationRequest.has(cacheKey)) {
+    return pendingPronunciationRequest.get(cacheKey) as Promise<string>
+  }
+  const getFallback = () => {
+    const fallback = getFallbackPronunciationSrc(safeWord, pronunciation)
+    if (fallback) {
+      pronunciationCache.set(cacheKey, fallback)
+    }
+    return fallback
+  }
+  const request = wordBookAPI
+    .textToVoice({ text })
+    .then((res) => {
+      if (res.code === 0 && res.data?.audioFileName) {
+        const src = `${VOICE_PREFIX}${res.data.audioFileName}`
+        pronunciationCache.set(cacheKey, src)
+        return src
+      }
+      return getFallback()
+    })
+    .catch(() => getFallback())
+    .finally(() => {
+      pendingPronunciationRequest.delete(cacheKey)
+    })
+  pendingPronunciationRequest.set(cacheKey, request)
+  return request
 }
 
 export default function usePronunciationSound(word: string, isLoop?: boolean) {
   const pronunciationConfig = useAtomValue(pronunciationConfigAtom)
   const loop = useMemo(() => (typeof isLoop === 'boolean' ? isLoop : pronunciationConfig.isLoop), [isLoop, pronunciationConfig.isLoop])
   const [isPlaying, setIsPlaying] = useState(false)
-
-  const [play, { stop, sound }] = useSound(generateWordSoundSrc(word, pronunciationConfig.type), {
-    html5: true,
-    format: ['mp3'],
-    loop,
-    volume: pronunciationConfig.volume,
-    rate: pronunciationConfig.rate,
-  } as HookOptions)
+  const [audioSrc, setAudioSrc] = useState('')
+  const soundRef = useRef<Howl | null>(null)
+  const pendingPlayRef = useRef(false)
 
   useEffect(() => {
-    if (!sound) return
-    sound.loop(loop)
-    return noop
-  }, [loop, sound])
+    let disposed = false
+    const pronunciation = pronunciationConfig.type
+    pendingPlayRef.current = false
+    setIsPlaying(false)
+    setAudioSrc('')
+    if (!pronunciation) {
+      return
+    }
+    fetchPronunciationAudio(word, pronunciation).then((src) => {
+      if (disposed) return
+      setAudioSrc(src)
+    })
+    return () => {
+      disposed = true
+    }
+  }, [word, pronunciationConfig.type])
 
   useEffect(() => {
-    if (!sound) return
-    const unListens: Array<() => void> = []
+    const prevSound = soundRef.current
+    if (prevSound) {
+      prevSound.unload()
+      soundRef.current = null
+    }
+    if (!audioSrc) return
 
-    unListens.push(addHowlListener(sound, 'play', () => setIsPlaying(true)))
-    unListens.push(addHowlListener(sound, 'end', () => setIsPlaying(false)))
-    unListens.push(addHowlListener(sound, 'pause', () => setIsPlaying(false)))
-    unListens.push(addHowlListener(sound, 'playerror', () => setIsPlaying(false)))
+    const sound = new Howl({
+      src: [audioSrc],
+      html5: true,
+      loop,
+      volume: pronunciationConfig.volume,
+      rate: pronunciationConfig.rate,
+      preload: true,
+    })
+    soundRef.current = sound
+    const unListens = [
+      addHowlListener(sound, 'play', () => setIsPlaying(true)),
+      addHowlListener(sound, 'end', () => setIsPlaying(false)),
+      addHowlListener(sound, 'pause', () => setIsPlaying(false)),
+      addHowlListener(sound, 'stop', () => setIsPlaying(false)),
+      addHowlListener(sound, 'playerror', () => setIsPlaying(false)),
+      addHowlListener(sound, 'loaderror', () => setIsPlaying(false)),
+    ]
+
+    if (pendingPlayRef.current) {
+      pendingPlayRef.current = false
+      sound.stop()
+      sound.play()
+    }
 
     return () => {
-      setIsPlaying(false)
       unListens.forEach((unListen) => unListen())
-      ;(sound as Howl).unload()
+      if (soundRef.current === sound) {
+        soundRef.current = null
+      }
+      sound.unload()
     }
-  }, [sound])
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 仅在音频源变化时重新创建播放器实例
+  }, [audioSrc])
+
+  useEffect(() => {
+    const sound = soundRef.current
+    if (!sound) return
+    sound.loop(loop)
+    sound.volume(pronunciationConfig.volume)
+    sound.rate(pronunciationConfig.rate)
+  }, [loop, pronunciationConfig.rate, pronunciationConfig.volume])
+
+  const play = useCallback(() => {
+    const sound = soundRef.current
+    if (!sound) {
+      pendingPlayRef.current = true
+      return
+    }
+    pendingPlayRef.current = false
+    sound.stop()
+    sound.play()
+  }, [])
+
+  const stop = useCallback(() => {
+    pendingPlayRef.current = false
+    const sound = soundRef.current
+    if (!sound) return
+    sound.stop()
+    setIsPlaying(false)
+  }, [])
+
+  useEffect(
+    () => () => {
+      pendingPlayRef.current = false
+      if (soundRef.current) {
+        soundRef.current.unload()
+        soundRef.current = null
+      }
+    },
+    [],
+  )
 
   return { play, stop, isPlaying }
 }
@@ -78,25 +198,33 @@ export function usePrefetchPronunciationSound(word: string | undefined) {
   useEffect(() => {
     if (!word) return
 
-    const soundUrl = generateWordSoundSrc(word, pronunciationConfig.type)
-    if (soundUrl === '') return
+    let disposed = false
+    let audioEl: HTMLAudioElement | null = null
+    const pronunciation = pronunciationConfig.type
+    if (!pronunciation) return
 
-    const head = document.head
-    const isPrefetch = (Array.from(head.querySelectorAll('link[href]')) as HTMLLinkElement[]).some((el) => el.href === soundUrl)
+    fetchPronunciationAudio(word, pronunciation).then((src) => {
+      if (disposed || !src) return
+      const head = document.head
+      const exists = Array.from(head.querySelectorAll('audio[data-pronunciation-src]')).some(
+        (el) => el.getAttribute('data-pronunciation-src') === src,
+      )
+      if (exists) return
 
-    if (!isPrefetch) {
-      const audio = new Audio()
-      audio.src = soundUrl
-      audio.preload = 'auto'
+      audioEl = new Audio()
+      audioEl.src = src
+      audioEl.preload = 'auto'
+      audioEl.crossOrigin = 'anonymous'
+      audioEl.style.display = 'none'
+      audioEl.setAttribute('data-pronunciation-src', src)
 
-      // gpt 说这这两行能尽可能规避下载插件被触发问题。 本地测试不加也可以，考虑到别的插件可能有问题，所以加上保险
-      audio.crossOrigin = 'anonymous'
-      audio.style.display = 'none'
+      head.appendChild(audioEl)
+    })
 
-      head.appendChild(audio)
-
-      return () => {
-        head.removeChild(audio)
+    return () => {
+      disposed = true
+      if (audioEl) {
+        document.head.removeChild(audioEl)
       }
     }
   }, [pronunciationConfig.type, word])
