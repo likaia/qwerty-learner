@@ -2,6 +2,7 @@ import authLoginAPI from '@/api/authLoginAPI'
 import type { authLoginType, getAuthorizeDataType, responseDataType, userInfoType } from '@/api/type/WordBookType'
 import { BaiduIcon, CodingIcon, GiteeIcon, GithubIcon, OSChinaIcon } from '@/assets/svg/AuthIcon'
 import Layout from '@/components/Layout'
+import { resetNeedLoginEvent } from '@/config/axios'
 import { authInfoAtom, needLogin, refreshWordBookAtom, userInfoAtom } from '@/store'
 import { Button, Card, Divider, Form, Grid, Input, Notification, Tooltip, Typography } from '@arco-design/web-react'
 import { useAtom } from 'jotai'
@@ -37,6 +38,7 @@ export default function Login() {
           position: 'bottomRight',
         })
         setNeedToLogIn(false)
+        resetNeedLoginEvent()
         localStorage.setItem('token', data.token)
         localStorage.setItem('refreshToken', data.refreshToken)
         localStorage.setItem('userId', data.userID)
@@ -73,6 +75,7 @@ export default function Login() {
                 position: 'bottomRight',
               })
               setNeedToLogIn(false)
+              resetNeedLoginEvent()
               const userId = res.data.userID
               const username = res.data.username
               const token = res.data.token

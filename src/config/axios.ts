@@ -33,10 +33,35 @@ const defaultConfig = {
 // 创建实例
 const _axios = axiosObj.create(defaultConfig)
 
-let tokenRenewFail = false
+let hasDispatchNeedLoginEvent = false
 
-// token续期失败的错误处理
-const renewalFailedFn = (reason: string) => {
+const authRequestWhiteList = ['/user/login', '/user/tokenRenew', '/user/authorizeLogin', '/user/updateOnlineStatus']
+
+const shouldSkipTokenAttach = (url?: string) => {
+  if (!url) return false
+  return authRequestWhiteList.some((item) => url.includes(item))
+}
+
+const shouldSkipTokenRenew = (url?: string) => shouldSkipTokenAttach(url)
+
+export const resetNeedLoginEvent = () => {
+  hasDispatchNeedLoginEvent = false
+}
+
+const clearAuthToken = () => {
+  localStorage.removeItem('token')
+  localStorage.removeItem('refreshToken')
+}
+
+const rejectPendingRequests = (reason: string) => {
+  if (requests.length === 0) return
+  requests.forEach((cb: pendingRequest) => cb(undefined, reason))
+  requests = []
+}
+
+const notifyNeedLogin = (reason: string) => {
+  if (hasDispatchNeedLoginEvent) return
+  hasDispatchNeedLoginEvent = true
   // 触发自定义事件，告知组件需要更新全局状态
   const axiosCatchEvent = new CustomEvent('axiosCatchEvent', { detail: { reason, type: 'needLogin' } })
   window.dispatchEvent(axiosCatchEvent)
@@ -58,13 +83,33 @@ const renewalFailedFn = (reason: string) => {
   })
 }
 
+const handleTokenRenewFailure = (reason: string) => {
+  clearAuthToken()
+  rejectPendingRequests(reason)
+  notifyNeedLogin(reason)
+}
+
+const setUserOffline = (reason: string) => {
+  handleTokenRenewFailure(reason)
+  authLoginAPI
+    .updateOnlineStatus({
+      userId: window.localStorage.getItem('userId') || '',
+      status: false,
+    })
+    .catch(() => {
+      // ignore offline errors
+    })
+}
+
 // 请求拦截器
 _axios.interceptors.request.use(
   function (config) {
-    // 从本地存处理获取token
-    const token = window.localStorage.getItem('token')
-    // 如果token存在就在请求头里添加
-    token && (config.headers.token = token)
+    if (!shouldSkipTokenAttach(config.url)) {
+      // 从本地存处理获取token
+      const token = window.localStorage.getItem('token')
+      // 如果token存在就在请求头里添加
+      token && (config.headers.token = token)
+    }
     return config
   },
   function (error) {
@@ -77,16 +122,13 @@ _axios.interceptors.request.use(
 // 响应拦截器
 _axios.interceptors.response.use(
   function (response: AxiosResponse) {
-    // token续期失败
-    if (tokenRenewFail) {
-      renewalFailedFn('token续期失败')
-      tokenRenewFail = false
-      return Promise.reject('token续期失败')
-    }
     // token过期，续期token
     if (response.data?.code === 401) {
       // 原请求的配置
       const config = response.config
+      if (shouldSkipTokenRenew(config?.url)) {
+        return response.data
+      }
       if (!isRefreshing) {
         // 开始刷新token
         isRefreshing = true
@@ -111,26 +153,13 @@ _axios.interceptors.response.use(
               // 重试当前请求并返回promise
               return _axios(config)
             }
-            // 清空队列
-            requests = []
-            // 删除token
-            localStorage.removeItem('token')
-            // 修改登录状态
-            authLoginAPI
-              .updateOnlineStatus({
-                userId: window.localStorage.getItem('userId') || '',
-                status: false,
-              })
-              .then((data: responseDataType) => {
-                renewalFailedFn(data.msg || '退出登录成功')
-              })
-              .catch(() => {
-                tokenRenewFail = true
-              })
+            const reason = res.msg || 'token续期失败'
+            setUserOffline(reason)
+            return Promise.reject(reason)
           })
           .catch((reason) => {
-            renewalFailedFn(reason)
-            throw reason
+            setUserOffline(reason)
+            return Promise.reject(reason)
           })
           .finally(() => {
             // 改变刷新状态
@@ -138,12 +167,16 @@ _axios.interceptors.response.use(
           })
       } else {
         // 正在刷新token，返回一个未执行resolve的promise
-        return new Promise((resolve) => {
+        return new Promise((resolve, reject) => {
           // 将resolve放进队列，用一个函数形式来保存，等token刷新后直接执行
-          requests.push((token: string) => {
-            config.headers.token = token
-            config.baseURL = ''
-            resolve(_axios(config))
+          requests.push((token?: string, error?: any) => {
+            if (token) {
+              config.headers.token = token
+              config.baseURL = ''
+              resolve(_axios(config))
+              return
+            }
+            reject(error || 'token续期失败')
           })
         })
       }
