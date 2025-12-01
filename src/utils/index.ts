@@ -46,18 +46,24 @@ export const isChineseSymbol = (val: string): boolean =>
     val,
   )
 
-export const IsDesktop = () => {
-  const userAgentInfo = navigator.userAgent
-  const Agents = ['Android', 'iPhone', 'SymbianOS', 'Windows Phone', 'iPad', 'iPod']
+const PHONE_UA_REGEX = /(Android).*(Mobile)|iPhone|iPod|Windows Phone|BlackBerry|Opera Mini|Mobi/i
 
-  let flag = true
-  for (let v = 0; v < Agents.length; v++) {
-    if (userAgentInfo.indexOf(Agents[v]) > 0) {
-      flag = false
-      break
-    }
-  }
-  return flag
+const isSmallScreenDevice = () => {
+  const screenWidth = window.screen?.width || window.innerWidth
+  const screenHeight = window.screen?.height || window.innerHeight
+  const shorterSide = Math.min(screenWidth, screenHeight)
+  return shorterSide <= 600
+}
+
+export const IsDesktop = () => {
+  const ua = navigator.userAgent || ''
+  const isPhoneUA = PHONE_UA_REGEX.test(ua)
+  const isUaDataPhone = navigator.userAgentData?.mobile === true
+  const looksLikePhoneScreen = isSmallScreenDevice()
+
+  // 只拦手机： 需要满足手机UA 或者 UAData 标记为手机，并且屏幕尺寸足够小
+  const isPhoneDevice = (isPhoneUA || isUaDataPhone) && looksLikePhoneScreen
+  return !isPhoneDevice
 }
 
 export const IS_MAC_OS = navigator.userAgent.indexOf('Macintosh') !== -1

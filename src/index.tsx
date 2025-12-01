@@ -79,9 +79,6 @@ function Root() {
   useEffect(() => {
     const handleResize = () => {
       const isMobile = window.innerWidth <= 600
-      if (!isMobile) {
-        window.location.href = '/english-study'
-      }
       setIsMobile(isMobile)
     }
 
