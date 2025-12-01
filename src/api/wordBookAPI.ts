@@ -23,12 +23,14 @@ const wordBookAPI = {
   importWords(file: FormData) {
     return services.post(`${base.lkBaseURL}/wordBook/importWords`, file, {
       headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: 1000 * 60 * 3,
     })
   },
   // 批量导入
   importWordsForExcel(file: FormData) {
     return services.post(`${base.lkBaseURL}/wordBook/importWordsForExcel`, file, {
       headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: 1000 * 60 * 3,
     })
   },
   textToVoice(params: { text: string }) {

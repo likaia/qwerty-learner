@@ -1,6 +1,7 @@
 import type { responseDataType, wordBookRow } from '@/api/type/WordBookType'
 import wordBookAPI from '@/api/wordBookAPI'
 import Layout from '@/components/Layout'
+import { LoadingUI } from '@/components/Loading'
 import BubbleConfirmTemplate from '@/pages/Typing/components/VocabularyManage/BubbleConfirmTemplate'
 import BubbleDelWordsBookConfirm from '@/pages/Typing/components/VocabularyManage/BubbleDelWordsBookConfirm'
 import { refreshWordBookAtom, wordBookListAtom, wordBookListCountAtom } from '@/store'
@@ -26,6 +27,7 @@ const VocabularyManage = () => {
   const wordBookList = useAtomValue(wordBookListAtom)
   const wordBookListCount = useAtomValue(wordBookListCountAtom)
   const [loading, setLoading] = useState(false)
+  const [importing, setImporting] = useState(false)
   const inputRef: Ref<RefInputType> | undefined = useRef(null)
   const filterRef: Ref<HTMLDivElement> = useRef(null)
   const [tableHeight, setTableHeight] = useState(0)
@@ -272,85 +274,56 @@ const VocabularyManage = () => {
       const formData = new FormData()
       // 后台取值字段 | blob文件数据 | 文件名称
       formData.append('file', file, file.name)
+      const resetUploadState = () => {
+        if (uploadRef?.current) {
+          uploadRef.current.value = ''
+        }
+        setImporting(false)
+      }
+      const handleImport = (importRequest: (formData: FormData) => Promise<responseDataType>) => {
+        setImporting(true)
+        importRequest(formData)
+          .then((res: responseDataType) => {
+            if (res.code === 0) {
+              // 刷新单词本数据
+              setRefreshWordBookAtom(true)
+              // 导入成功
+              Notification.success({
+                title: '导入成功',
+                content: '批量导入成功',
+                showIcon: true,
+                position: 'bottomRight',
+              })
+              return
+            }
+            // 导入失败
+            Notification.error({
+              title: '导入失败',
+              content: res.msg,
+              showIcon: true,
+              position: 'bottomRight',
+            })
+          })
+          .catch((error) => {
+            // 导入失败
+            Notification.error({
+              title: '导入失败',
+              content: error?.data?.msg || '发生未知错误',
+              showIcon: true,
+              position: 'bottomRight',
+            })
+          })
+          .finally(() => {
+            resetUploadState()
+          })
+      }
       switch (file.type) {
         case 'application/json':
-          wordBookAPI
-            .importWords(formData)
-            .then((res: responseDataType) => {
-              if (res.code === 0) {
-                // 刷新单词本数据
-                setRefreshWordBookAtom(true)
-                // 导入成功
-                Notification.success({
-                  title: '导入成功',
-                  content: '批量导入成功',
-                  showIcon: true,
-                  position: 'bottomRight',
-                })
-                return
-              }
-              // 导入失败
-              Notification.error({
-                title: '导入失败',
-                content: res.msg,
-                showIcon: true,
-                position: 'bottomRight',
-              })
-            })
-            .catch((error) => {
-              // 导入失败
-              Notification.error({
-                title: '导入失败',
-                content: error.data.msg,
-                showIcon: true,
-                position: 'bottomRight',
-              })
-            })
-            .finally(() => {
-              if (uploadRef?.current) {
-                uploadRef.current.value = ''
-              }
-            })
+          handleImport((formData: FormData) => wordBookAPI.importWords(formData))
           break
         case 'application/vnd.ms-excel':
         case 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet':
-          wordBookAPI
-            .importWordsForExcel(formData)
-            .then((res: responseDataType) => {
-              if (res.code === 0) {
-                // 刷新单词本数据
-                setRefreshWordBookAtom(true)
-                // 导入成功
-                Notification.success({
-                  title: '导入成功',
-                  content: '批量导入成功',
-                  showIcon: true,
-                  position: 'bottomRight',
-                })
-                return
-              }
-              // 导入失败
-              Notification.error({
-                title: '导入失败',
-                content: res.msg,
-                showIcon: true,
-                position: 'bottomRight',
-              })
-            })
-            .catch((error) => {
-              // 导入失败
-              Notification.error({
-                title: '导入失败',
-                content: error.data.msg,
-                showIcon: true,
-                position: 'bottomRight',
-              })
-            })
-            .finally(() => {
-              if (uploadRef?.current) {
-                uploadRef.current.value = ''
-              }
-            })
+          handleImport((formData: FormData) => wordBookAPI.importWordsForExcel(formData))
           break
         default:
           break
@@ -372,6 +345,14 @@ const VocabularyManage = () => {
 
   return (
     <Layout>
+      {importing && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 backdrop-blur-sm">
+          <div className="flex flex-col items-center gap-3 rounded-xl bg-white px-6 py-5 shadow-xl dark:bg-[#1f1f1f]">
+            <LoadingUI />
+            <div className="text-sm text-gray-700 dark:text-gray-200">导入中，请稍候...</div>
+          </div>
+        </div>
+      )}
       <div className="relative mb-auto mt-auto flex w-full flex-1 flex-col overflow-y-auto pl-20">
         <IconX className="absolute right-20 top-10 mr-2 h-7 w-7 cursor-pointer text-gray-400" onClick={onBack} />
         <div className="mt-20 flex w-full flex-1 flex-col items-center justify-center">
